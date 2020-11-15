@@ -18,9 +18,10 @@ from utils_memory import ReplayMemory, PRMemory
 import os
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
-use_dueling = False
+use_dueling = True
 use_PR = True
-use_DDQN = False
+use_DDQN = True
+use_MotionContinuity = True
 
 
 # In[2]:
@@ -33,8 +34,8 @@ RENDER = False
 SAVE_PREFIX = "./models"
 STACK_SIZE = 4
 
-EPS_START = 1.
-EPS_END = 0.1
+EPS_START = 0.5
+EPS_END = 0.0
 EPS_DECAY = 1000000
 
 BATCH_SIZE = 32
@@ -62,7 +63,8 @@ agent = Agent(
     EPS_END,
     EPS_DECAY,
     use_dueling = use_dueling,
-    use_PR = use_PR
+    use_PR = use_PR,
+    use_DDQN = use_DDQN
 )
 if not use_PR:
     memory = ReplayMemory(STACK_SIZE + 1, MEM_SIZE, device)
@@ -81,6 +83,7 @@ progressive = tqdm(range(MAX_STEPS), total=MAX_STEPS,
                    ncols=50, leave=False, unit="b")
 for step in progressive:
     if done:
+        last_act = 0
         observations, _, _ = env.reset()
         for obs in observations:
             obs_queue.append(obs)
@@ -89,14 +92,21 @@ for step in progressive:
     state = env.make_state(obs_queue).to(device).float()
     action = agent.run(state, training)
     obs, reward, done = env.step(action)
+    
+    if done:
+        reward -= 100
+    if last_act != action:
+        reward -= 0.2
+        if last_act == 3-action:#相反动作
+            reward -= 0.3
+
+    last_act = action
+    
     obs_queue.append(obs)
     memory.push(env.make_folded_state(obs_queue), action, reward, done)
-
+    
     if step % POLICY_UPDATE == 0 and training:
-        if not use_PR:
-            agent.learn(memory, BATCH_SIZE)
-        else:
-            agent.learn_PR(memory, BATCH_SIZE)
+        agent.learn(memory, BATCH_SIZE)
 
     if step % TARGET_UPDATE == 0:
         agent.sync()
@@ -116,7 +126,7 @@ for step in progressive:
         done = True
 
 
-# In[4]:
+# In[ ]:
 
 
 batch_size=32

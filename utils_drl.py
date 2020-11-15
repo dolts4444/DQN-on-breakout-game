@@ -33,6 +33,7 @@ class Agent(object):
             restore: Optional[str] = None,
             
             use_dueling = False,
+            use_DDQN = False,
             use_PR = False, #Prioritized Experience Replay
     ) -> None:
         self.__action_dim = action_dim
@@ -46,6 +47,10 @@ class Agent(object):
         self.__eps = eps_start
         self.__r = random.Random()
         self.__r.seed(seed)
+        
+        self.use_dueling = use_dueling
+        self.use_DDQN = use_DDQN
+        self.use_PR = use_PR
 
         if not use_dueling:
             self.__policy = DQN(action_dim, device).to(device)
@@ -77,72 +82,47 @@ class Agent(object):
             with torch.no_grad():
                 return self.__policy(state).max(1).indices.item()
         return self.__r.randint(0, self.__action_dim - 1)
-
-    def learn_DDQN(self, memory: ReplayMemory, batch_size: int) -> float:
-        """learn trains the value network via TD-learning."""
-        state_batch, action_batch, reward_batch, next_batch, done_batch = \
-            memory.sample(batch_size)
-
-        actions_value = self.__policy(next_batch.float())
-        max_val_action = actions_value.max(1)[1].unsqueeze(-1)
     
-        actions_value = self.__target(next_batch.float()).detach()  
-        expected = reward_batch + (self.__gamma * actions_value.gather(1, max_val_action)) * (1. - done_batch) 
-        values = self.__policy(state_batch.float()).gather(1, action_batch)
-
-        loss = F.smooth_l1_loss(values, expected)
-
-        self.__optimizer.zero_grad()
-        loss.backward()
-        for param in self.__policy.parameters():
-            param.grad.data.clamp_(-1, 1)
-        self.__optimizer.step()
-
-        return loss.item()
     
     def learn(self, memory: ReplayMemory, batch_size: int) -> float:
         """learn trains the value network via TD-learning."""
-        state_batch, action_batch, reward_batch, next_batch, done_batch = \
-            memory.sample(batch_size)
+        if self.use_PR:
+            state_batch, action_batch, reward_batch, next_batch, done_batch, idxs, ISWeights = \
+                memory.sample(batch_size)
+        else:
+            state_batch, action_batch, reward_batch, next_batch, done_batch = \
+                memory.sample(batch_size)
+            
+        if self.use_DDQN:
+            actions_value = self.__policy(next_batch.float())
+            max_val_action = actions_value.max(1)[1].unsqueeze(-1)
 
-        values = self.__policy(state_batch.float()).gather(1, action_batch)
-        values_next = self.__target(next_batch.float()).max(1).values.detach()
-        expected = (self.__gamma * values_next.unsqueeze(1)) * \
-            (1. - done_batch) + reward_batch
-        loss = F.smooth_l1_loss(values, expected)
+            actions_value = self.__target(next_batch.float()).detach()  
+            expected = reward_batch + (self.__gamma * actions_value.gather(1, max_val_action)) * (1. - done_batch) 
+            values = self.__policy(state_batch.float()).gather(1, action_batch)
+        else:
+            values = self.__policy(state_batch.float()).gather(1, action_batch)
+            values_next = self.__target(next_batch.float()).max(1).values.detach()
+            expected = (self.__gamma * values_next.unsqueeze(1)) * \
+                (1. - done_batch) + reward_batch
+            
+            
+        if self.use_PR:    
+            abs_errors = torch.abs(expected - values).data.cpu().numpy()
+            # update priority
+            memory.batch_update(idxs, abs_errors)
+            loss = (ISWeights * F.smooth_l1_loss(values, expected, reduction = 'none')).mean()
+        else:
+            loss = F.smooth_l1_loss(values, expected)
 
         self.__optimizer.zero_grad()
         loss.backward()
-        for param in self.__policy.parameters():
-            param.grad.data.clamp_(-1, 1)
+        #for param in self.__policy.parameters():
+        #    param.grad.data.clamp_(-1, 1)
         self.__optimizer.step()
 
         return loss.item()
 
-    def learn_PR(self, memory: ReplayMemory, batch_size: int) -> float:
-        """learn trains the value network via TD-learning."""
-        state_batch, action_batch, reward_batch, next_batch, done_batch, idxs, ISWeights = \
-            memory.sample(batch_size)
-
-        values = self.__policy(state_batch.float()).gather(1, action_batch)
-        values_next = self.__target(next_batch.float()).max(1).values.detach()
-        expected = (self.__gamma * values_next.unsqueeze(1)) * \
-            (1. - done_batch) + reward_batch
-            
-        abs_errors = torch.abs(expected - values).data.cpu().numpy()
-
-        # update priority
-        memory.batch_update(idxs, abs_errors)
-            
-        loss = (ISWeights * F.smooth_l1_loss(values, expected, reduction = 'none')).mean()
-
-        self.__optimizer.zero_grad()
-        loss.backward()
-        for param in self.__policy.parameters():
-            param.grad.data.clamp_(-1, 1)
-        self.__optimizer.step()
-
-        return loss.item()
 
     def sync(self) -> None:
         """sync synchronizes the weights from the policy network to the target
