@@ -1,4 +1,4 @@
-
+#!/usr/bin/env python
 # coding: utf-8
 
 # In[1]:
@@ -124,62 +124,4 @@ for step in progressive:
         agent.save(os.path.join(
             SAVE_PREFIX, f"model_{step//EVALUATE_FREQ:03d}"))
         done = True
-
-
-# In[ ]:
-
-
-batch_size=32
-state_batch, action_batch, reward_batch, next_batch, done_batch, idxs, ISWeights = memory.sample(batch_size)
-
-values = agent.__policy(state_batch.float()).gather(1, action_batch)
-values_next = agent.__target(next_batch.float()).max(1).values.detach()
-expected = (agent.__gamma * values_next.unsqueeze(1)) * (1. - done_batch) + reward_batch
-            
-abs_errors = torch.abs(expected - values).data.cpu().numpy()
-
-
-# In[5]:
-
-
-ISWeights
-
-
-# In[21]:
-
-
-memory.tree.get_min()
-
-
-# In[19]:
-
-
-1/MEM_SIZE/min_prob
-
-
-# In[15]:
-
-
-import numpy as np
-n=32
-pri_seg = memory.tree.total_p / n       # priority segment
-memory.beta = np.min([1., memory.beta + memory.beta_increment_per_sampling])  # max = 1
-
-min_prob = memory.tree.get_min() / memory.tree.total_p     # for later calculate ISweight
-if min_prob == 0:
-    min_prob = 0.00001 / memory.tree.total_p
-for i in range(n):
-    a, b = pri_seg * i, pri_seg * (i + 1)
-    v = np.random.uniform(a, b)
-    idx, p, data = memory.tree.get_leaf(v)
-    prob = p / memory.tree.total_p
-    ISWeights[i, 0] = np.power(prob/min_prob, -memory.beta)
-    #print(b_states[i].shape, data[0][0:4].shape)
-    print(1/prob/MEM_SIZE , p ,ISWeights[i, 0])
-
-
-# In[13]:
-
-
-max(memory.tree.tree[-MEM_SIZE:])
 
